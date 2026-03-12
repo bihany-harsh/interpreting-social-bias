@@ -1,0 +1,21 @@
+{
+  "batch_size": 16,
+  "data_path": "./data_ig2/v1",
+  "debug": -1,
+  "demographic1": "black",
+  "demographic2": "white",
+  "demographic_dimension": "ethnicity",
+  "get_base": false,
+  "get_ig2_gold": false,
+  "get_ig2_gold_filtered": false,
+  "get_ig2_gold_gap_filtered": false,
+  "get_ig2_pred": false,
+  "get_pred": false,
+  "gpt2_variant": "gpt2",
+  "gpus": "0",
+  "max_seq_length": 1024,
+  "modifier": "N",
+  "num_batch": 10,
+  "output_dir": "./data_ig2/v1/results/",
+  "seed": 42
+}

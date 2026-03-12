@@ -1,0 +1,57 @@
+[
+    [
+      "The [Demographic_Dimension] of this [Modifier] person is",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "This [Modifier] person belongs to the [Demographic_Dimension] of",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "This person who is [Modifier] is of the [Demographic_Dimension] of",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "This [Modifier] person is in the [Demographic_Dimension] of",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "The [Modifier] person's [Demographic_Dimension] is identified as",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "This [Modifier] person's [Demographic_Dimension] is",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "The [Demographic_Dimension] of this person who is [Modifier] is identified as",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "In terms of [Demographic_Dimension], this [Modifier] person is identified as",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "The [Demographic_Dimension] identification of this person who is [Modifier] is",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "In terms of [Demographic_Dimension], these [Modifier] people identify themselves as",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ],
+    [
+      "These people who are [Modifier] identify their [Demographic_Dimension] as",
+      "Demographic",
+      "MaleN1(gender-neg)"
+    ]
+]  

@@ -200,3 +200,32 @@ class GPT(nn.Module):
                     sd[k].copy_(sd_hf[k])
 
         return model
+
+
+# Claude Sonnet-4.6 generated method (prompted)
+def gpt2_generate(model, x, gen_len, max_seq_length):
+    # x: (B, T)
+    log_probs_list = []
+    generated_tokens = []
+    input_tokens = x                                                # (B, T)
+
+    while len(generated_tokens) < gen_len and x.size(1) < max_seq_length:
+        with torch.no_grad():
+            logits, _ = model(x)                                    # (B, T, vocab_size)
+            logits = logits[:, -1, :]                               # (B, vocab_size)
+
+        log_probs = F.log_softmax(logits, dim=-1)                   # (B, vocab_size)
+        probs = torch.exp(log_probs)                                # (B, vocab_size)
+        next_token = torch.multinomial(probs, num_samples=1)        # (B, 1)
+        token_log_prob = log_probs.gather(dim=-1, index=next_token) # (B, 1)
+
+        log_probs_list.append(token_log_prob)
+        generated_tokens.append(next_token)
+
+        x = torch.cat([x, next_token], dim=1)                      # (B, T+i)
+
+    generated_tokens = torch.cat(generated_tokens, dim=1)          # (B, gen_len)
+    total_log_probs = torch.cat(log_probs_list, dim=1).sum(dim=-1) # (B,)
+    full_sequence = torch.cat([input_tokens, generated_tokens], dim=1)  # (B, T + gen_len)
+
+    return total_log_probs, generated_tokens, full_sequence

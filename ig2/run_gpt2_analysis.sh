@@ -1,0 +1,7 @@
+python3 ig2_gpt2_analyze_bias.py \
+    --data_path ./data_ig2/v1 \
+    --demographic_dimension ethnicity \
+    --demographic1 black \
+    --demographic2 white \
+    --modifier N \
+    --output_dir ./data_ig2/v1/results/

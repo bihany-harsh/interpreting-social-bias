@@ -1,3 +1,14 @@
 .vscode
 .ipynb_checkpoints
 __pycache__
+age
+ethnicity
+gender
+occupation
+physical_appearance
+politics
+religion
+sexuality
+socioeconomic_status
+
+remove_allbag_files.sh
