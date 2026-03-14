@@ -3,6 +3,7 @@
 
 # ** ACKNOWLEDGMENT **: 
 # 1. a bug-report was generated after the code was written using Claude Opus 4.6, and then the bugs detected were fixed. (bug report to found within the ai-acknowledgment folder)
+# 2. for clean log friendly (file logs, and output logs) code using Claude Sonner 4.6
 
 import argparse
 import torch
