@@ -11,4 +11,18 @@ religion
 sexuality
 socioeconomic_status
 
+age_mini
+ethnicity_mini
+gender_mini
+occupation_mini
+physical_appearance_mini
+politics_mini
+religion_mini
+sexuality_mini
+socioeconomic_status_mini
+
+results
+
 remove_allbag_files.sh
+
+*.log

@@ -1,4 +1,4 @@
-# this code is borrowed from Andrej Karpathy's build-nanogpt tutorial
+# this code is borrowed and re-purposed from Andrej Karpathy's build-nanogpt tutorial
 # https://github.com/karpathy/build-nanogpt
 
 import os
@@ -49,13 +49,13 @@ class MLP(nn.Module):
         self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd)
         self.c_proj.NANOGPT_SCALE_INIT = 1
 
-    def forward(self, x, return_neurons=False, patched_activation=None, target_positions=None):
+    def forward(self, x, return_neurons=False, patched_mlp_activation=None, target_positions=None):
         x = self.c_fc(x)
         inter_x = self.gelu(x)
         
-        if patched_activation is not None and target_positions is not None:
+        if patched_mlp_activation is not None and target_positions is not None:
             for pos in target_positions:
-                inter_x[:, pos, :] = patched_activation
+                inter_x[:, pos, :] = patched_mlp_activation
         
         out = self.c_proj(inter_x)
         if return_neurons:
@@ -72,10 +72,10 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
 
-    def forward(self, x, return_neurons=False, patched_activation=None, target_positions=None):
+    def forward(self, x, return_neurons=False, patched_mlp_activation=None, target_positions=None):
         x = x + self.attn(self.ln_1(x))
-        if return_neurons or patched_activation is not None:
-            mlp_out, mlp_inter_neurons = self.mlp(self.ln_2(x), return_neurons=True, patched_activation=patched_activation, target_positions=target_positions)
+        if return_neurons or patched_mlp_activation is not None:
+            mlp_out, mlp_inter_neurons = self.mlp(self.ln_2(x), return_neurons=True, patched_mlp_activation=patched_mlp_activation, target_positions=target_positions)
             x = x + mlp_out
             if return_neurons:
                 return x, mlp_inter_neurons
@@ -284,7 +284,3 @@ def gpt2_generate(model, x, gen_len, max_seq_length, target_layer=None, return_n
         return total_log_probs, generated_tokens, full_sequence, pooled_neurons
 
     return total_log_probs, generated_tokens, full_sequence
-
-# NOTE: decoder-only transformers and hence the target is towards the end of the sequence
-def get_ig2(model, target_completion, target_layer, patched_mlp_activation):
-    pass
