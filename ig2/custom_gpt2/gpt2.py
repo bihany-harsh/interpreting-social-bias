@@ -49,9 +49,14 @@ class MLP(nn.Module):
         self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd)
         self.c_proj.NANOGPT_SCALE_INIT = 1
 
-    def forward(self, x, return_neurons=False):
+    def forward(self, x, return_neurons=False, patched_activation=None, target_positions=None):
         x = self.c_fc(x)
         inter_x = self.gelu(x)
+        
+        if patched_activation is not None and target_positions is not None:
+            for pos in target_positions:
+                inter_x[:, pos, :] = patched_activation
+        
         out = self.c_proj(inter_x)
         if return_neurons:
             return out, inter_x
@@ -67,14 +72,17 @@ class Block(nn.Module):
         self.ln_2 = nn.LayerNorm(config.n_embd)
         self.mlp = MLP(config)
 
-    def forward(self, x, return_neurons=False):
+    def forward(self, x, return_neurons=False, patched_activation=None, target_positions=None):
         x = x + self.attn(self.ln_1(x))
-        if return_neurons:
-            mlp_out, mlp_inter_neurons = self.mlp(self.ln_2(x), return_neurons=return_neurons)
+        if return_neurons or patched_activation is not None:
+            mlp_out, mlp_inter_neurons = self.mlp(self.ln_2(x), return_neurons=True, patched_activation=patched_activation, target_positions=target_positions)
             x = x + mlp_out
-            return x, mlp_inter_neurons
+            if return_neurons:
+                return x, mlp_inter_neurons
+            else:
+                return x
         else:
-            x = x + self.mlp(self.ln_2(x), return_neurons=return_neurons)
+            x = x + self.mlp(self.ln_2(x))
             return x
 
 @dataclass
@@ -116,7 +124,15 @@ class GPT(nn.Module):
         elif isinstance(module, nn.Embedding):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, idx, targets=None, target_layer=None, return_neurons=False):
+    def forward(self, idx, targets=None, target_layer=None, return_neurons=False, patched_mlp_activation=None, target_positions=None, target_label=None):
+        
+        if patched_mlp_activation is not None:
+            batch_size = patched_mlp_activation.shape[0]
+            idx = idx.repeat(batch_size, 1)
+            if targets is not None:
+                targets = targets.repeat(batch_size, 1)
+        
+        
         # idx is of shape (B, T)
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
@@ -127,22 +143,33 @@ class GPT(nn.Module):
         x = tok_emb + pos_emb
         # forward the blocks of the transformer
         
-        if target_layer is not None:
-            for block_idx, block in enumerate(self.transformer.h):
-                if target_layer == block_idx:
-                    if return_neurons:
-                        x, mlp_inter_neurons = block(x, return_neurons=return_neurons)
-                    else:
-                        x = block(x)
+        mlp_inter_neurons = None
+        
+        for block_idx, block in enumerate(self.transformer.h):
+            if target_layer is not None and target_layer == block_idx:
+                if patched_mlp_activation is not None:
+                    # we need to do the activation patching
+                    x = block(x, patched_mlp_activation=patched_mlp_activation, target_positions=target_positions)
+                elif return_neurons:
+                    # the normal forward pass to get the activatiojns
+                    x, mlp_inter_neurons = block(x, return_neurons=True)
                 else:
                     x = block(x)
-        else:
-            for block in self.transformer.h:
-                x = block(x)
-
-        # forward the final layernorm and the classifier
+                    
         x = self.transformer.ln_f(x)
-        logits = self.lm_head(x) # (B, T, vocab_size)
+        logits = self.lm_head(x)
+        
+        # ig2 calculations
+        if patched_mlp_activation is not None and target_label is not None:
+            # we need to calculate the derivative of the prob of the said completion wrt the patched completion
+            log_probs = F.log_softmax(logits, dim=-1)
+            sum_log_probs = torch.zeros(B, device=logits.device)
+            for i, pos in enumerate(target_positions):
+                sum_log_probs += log_probs[:, pos, target_label[i]]
+            
+            gradient = torch.autograd.grad(torch.unbind(sum_log_probs), patched_mlp_activation)
+            return sum_log_probs, gradient[0] # gradient is a tuple wrt all inputs (of which we have only-1)
+        
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
@@ -202,16 +229,34 @@ class GPT(nn.Module):
         return model
 
 
-# Claude Sonnet-4.6 generated method (prompted)
-def gpt2_generate(model, x, gen_len, max_seq_length):
+# Claude Sonnet-4.6 generated code (prompted) and subsequently edited
+def gpt2_generate(model, x, gen_len, max_seq_length, target_layer=None, return_neurons=False, pooling='mean'):
+    """
+    args and other comments:
+        model: autoregressive model
+        x: input_ids (B, T)
+        gen_len: the number of tokens to generate for each sequence in the batch
+        max_seq_length
+        target_layer: layer for which FFN activations need to be retrieved
+        return_neurons: flag whether to return neurons
+        pooling: ("mean" or "max") pooling is applied over the generated tokens corresponding neurons and the returned pooled_neurons is of size (B, 4*d_model)
+    """
+    
     # x: (B, T)
     log_probs_list = []
     generated_tokens = []
+    neurons_list = []
     input_tokens = x                                                # (B, T)
 
     while len(generated_tokens) < gen_len and x.size(1) < max_seq_length:
         with torch.no_grad():
-            logits, _ = model(x)                                    # (B, T, vocab_size)
+            if return_neurons and target_layer is not None:
+                logits, _, mlp_inter_neurons = model(x, target_layer=target_layer, return_neurons=True)
+                                                                    # mlp_inter_neurons: (B, T, 4*d_model)
+                neurons_list.append(mlp_inter_neurons[:, -1, :])   # (B, 4*d_model) — last token only
+            else:
+                logits, _ = model(x)                                # (B, T, vocab_size)
+
             logits = logits[:, -1, :]                               # (B, vocab_size)
 
         log_probs = F.log_softmax(logits, dim=-1)                   # (B, vocab_size)
@@ -228,4 +273,18 @@ def gpt2_generate(model, x, gen_len, max_seq_length):
     total_log_probs = torch.cat(log_probs_list, dim=1).sum(dim=-1) # (B,)
     full_sequence = torch.cat([input_tokens, generated_tokens], dim=1)  # (B, T + gen_len)
 
+    if return_neurons and target_layer is not None:
+        stacked_neurons = torch.stack(neurons_list, dim=1)          # (B, gen_len, 4*d_model)
+        if pooling == 'mean':
+            pooled_neurons = stacked_neurons.mean(dim=1)            # (B, 4*d_model)
+        elif pooling == 'max':
+            pooled_neurons = stacked_neurons.max(dim=1).values      # (B, 4*d_model)
+        else:
+            raise ValueError(f"Unsupported pooling type '{pooling}'. Choose 'mean' or 'max'.")
+        return total_log_probs, generated_tokens, full_sequence, pooled_neurons
+
     return total_log_probs, generated_tokens, full_sequence
+
+# NOTE: decoder-only transformers and hence the target is towards the end of the sequence
+def get_ig2(model, target_completion, target_layer, patched_mlp_activation):
+    pass

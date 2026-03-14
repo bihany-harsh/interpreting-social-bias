@@ -32,6 +32,16 @@ def process_example(example, max_seq_length, tokenizer):
         "output_ids": output_ids
     }
     
+def scaled_input(emb, batch_size, num_batch):
+    # emb is the ffn_activation/ffn_neurons
+    baseline = torch.zeros_like(emb)
+
+    num_points = batch_size * num_batch
+    step = (emb - baseline) / num_points
+
+    res = torch.cat([torch.add(baseline, step * i) for i in range(num_points)], dim=0)
+    return res, step[0]
+    
 
 def main():
     parser = argparse.ArgumentParser()
@@ -216,13 +226,17 @@ def main():
                     # eval_example: [`sentence`, `gold_demography`, `metadata-tag`]
                     processed_example = process_example(eval_example, args.max_seq_length, tokenizer)
                     
-                    tokenized_example, input_ids, tokenized_completion, output_ids = processed_example["tokenized_example"], processed_example["input_ids"], processed_example["tokenized_completion"], processed_example["output_ids"]
+                    tokenized_sentence = processed_example["tokenized_sentence"]
+                    input_ids = processed_example["input_ids"]
+                    tokenized_completion = processed_example["tokenized_completion"]
+                    output_ids = processed_example["output_ids"] # this is the gold label (token ids) list
                     
                     # unsqueeze to create batch dimension
-                    input_ids = torch.tensor(input_ids, dtype=torch.long).unsqueeze(0)
-                    output_ids = torch.tensor(output_ids, dtype=torch.long).unsqueeze(0)
-                    input_ids = input_ids.to(device)
-                    output_ids = output_ids.to(device)
+                    input_ids_t = torch.tensor(input_ids, dtype=torch.long).unsqueeze(0).to(device) # (1, T_p)
+                    output_ids_t = torch.tensor(output_ids, dtype=torch.long).unsqueeze(0).to(device) # (1, T_c)
+                    
+                    T_p = input_ids_t.size(1) # prompt length
+                    T_c = output_ids_t.size(1) # completion length
 
                     # autoregressive model and hence we are looking at the end
                     # which means the tgt_pos is always the end
@@ -234,60 +248,83 @@ def main():
                         'ig2_gold': [],
                         'base': []
                     }
+                    
+                    tokens_info = {
+                        "tokenized_sentence": tokenized_sentence,
+                        "tokenized_completion": tokenized_completion,
+                        "gold_demo": eval_example[1],
+                        "metadata": eval_example[2]
+                    }
+                    
+                    gold_full_sequence = torch.cat([input_ids_t, output_ids_t], dim=1) # (1, T_p+T_c)
+                    
+                    # positions would be the positions of the target completion
+                    target_positions = list(range(T_p - 1, T_p + T_c - 1))
 
+                    # get_pred: (sample) the model's actual prediction
+                    # TODO: discuss should we have argmax here or sampling is fine
                     if args.get_pred:
-                        # gets the prediction probability of the next token
                         # NOTE: generating output_ids.size(1)-many tokens for fair comparison
-                        pred_log_prob, generated_tokens, full_sequence = gpt2_generate(model, input_ids, gen_len=output_ids.size(1), max_seq_length=args.max_seq_length)
+                        pred_log_prob, generated_tokens, full_sequence = gpt2_generate(model, input_ids, gen_len=T_c, max_seq_length=args.max_seq_length)
                         
                         res_dict['pred'].append({
-                                "pred_log_prob": pred_log_prob,
+                                "pred_log_prob": pred_log_prob.item(),
                                 "generated_tokens": generated_tokens.tolist(),
                                 "generated_sentence": tokenizer.decode(generated_tokens[0, :].tolist()),
                                 "complete_sentence": tokenizer.decode(full_sequence[0, :].tolist())
                             }
                         )
+                        
+                    # much like gold full_seq setup, we do it for the pred generated as well to model ig2_pred case
+                    pred_full_seq = None
+                    pred_label = None
+                    if args.get_ig2_pred:
+                        pred_full_seq = torch.cat([input_ids_t, generated_tokens], dim=1) # (1, T_p + T_c) but the completion is that which the model generates
+                        pred_label = generated_tokens.squeeze(0).tolist()
+                    
 
-                    # TODO: pick up work from here
-                    for tgt_layer in range(model.bert.config.num_hidden_layers):
-                        ffn_weights, logits = model(input_ids=input_ids, attention_mask=input_mask, token_type_ids=segment_ids, tgt_pos=tgt_pos, tgt_layer=tgt_layer)  # (1, ffn_size), (1, n_vocab)
-                        pred_label = int(torch.argmax(logits[0, :]))  # scalar, 这里获得了pred_label，方便后面计算ig2_pred
-                        gold_label = tokenizer.convert_tokens_to_ids(tokens_info['gold_obj'])
-                        tokens_info['pred_obj'] = tokenizer.convert_ids_to_tokens(pred_label)
-                        scaled_weights, weights_step = scaled_input(ffn_weights, args.batch_size, args.num_batch)  # (num_points, ffn_size), (ffn_size)
-                        scaled_weights.requires_grad_(True)
-
-                        if args.get_ig2_pred:
-                            ig2_pred = None
-                            for batch_idx in range(args.num_batch):
-                                batch_weights = scaled_weights[batch_idx * args.batch_size:(batch_idx + 1) * args.batch_size]
-                                _, grad = model(input_ids=input_ids, attention_mask=input_mask, token_type_ids=segment_ids, tgt_pos=tgt_pos, tgt_layer=tgt_layer, tmp_score=batch_weights, tgt_label=pred_label)  # (batch, n_vocab), (batch, ffn_size)
-                                grad = grad.sum(dim=0)  # (ffn_size)
-                                ig2_pred = grad if ig2_pred is None else torch.add(ig2_pred, grad)  # (ffn_size)
-                            ig2_pred = ig2_pred * weights_step  # (ffn_size)
-                            res_dict['ig2_pred'].append(ig2_pred.tolist())
-
+                    for tgt_layer in range(model.config.n_layer):
                         if args.get_ig2_gold:
-                            ig2_gold = None
-                            for batch_idx in range(args.num_batch):
-                                batch_weights = scaled_weights[batch_idx * args.batch_size:(batch_idx + 1) * args.batch_size]
-                                _, grad = model(input_ids=input_ids, attention_mask=input_mask,
-                                                token_type_ids=segment_ids, tgt_pos=tgt_pos, tgt_layer=tgt_layer,
-                                                tmp_score=batch_weights, tgt_label=gold_label)
-                                grad = grad.sum(dim=0)
-                                ig2_gold = grad if ig2_gold is None else torch.add(ig2_gold, grad)
-                            ig2_gold = ig2_gold * weights_step
-                            res_dict['ig2_gold'].append(ig2_gold.tolist())
-
-                        if args.get_base:
-                            res_dict['base'].append(ffn_weights.squeeze().tolist())
-
-                    if args.get_ig2_gold_filtered:
-                        res_dict['ig2_gold'] = convert_to_triplet_ig2(res_dict['ig2_gold'])
-
-                    res_dict_bag.append([tokens_info, res_dict])
-
-                demo1_fw.write(res_dict_bag)
+                            with torch.no_grad():
+                                _, _, mlp_neurons_gold = model(gold_full_sequence, target_layer=tgt_layer, return_neurons=True) # (1, T_p+T_c, 4*d_model)
+                                
+                                gold_completion_neurons = mlp_neurons_gold[:, target_positions, :] # (1, T_c, 4*d_model)
+                                
+                                if args.pool_activation == "mean":
+                                    pooled_neurons_gold = gold_completion_neurons.mean(dim=1) # (1, 4*d_model)
+                                elif args.pool_activation == "max":
+                                    raise NotImplementedError
+                                else:
+                                    raise ValueError("pooling only mean and max.")
+                                
+                                scaled_neurons_gold, neuron_step_gold = scaled_input(pooled_neurons_gold, args.batch_size, args.num_batch) # (num_points, 4*d_model), (4*d_model)
+                                
+                                # grads and ig^2 metric calculation
+                                ig2_gold = None
+                                for batch_idx in range(args.num_batch):
+                                    batch_neurons = scaled_neurons_gold[
+                                        batch_idx * args.batch_size: (batch_idx+1)*args.batch_size
+                                    ]
+                                    
+                                    _, grad = model(
+                                        gold_full_sequence,
+                                        target_layer=tgt_layer,
+                                        patched_mlp_activation=batch_neurons,
+                                        target_positions=target_positions,
+                                        target_label=output_ids # the target label are from the dataset which are the output_ids
+                                    )
+                                    
+                                    grad = grad.sum(dim=0) # (4*d_model)
+                                    ig2_gold = grad if ig2_gold is None else torch.add(ig2_gold, grad)
+                                    
+                                ig2_gold = ig2_gold * neuron_step_gold #(4*d_model)
+                                res_dict["ig2_gold"].append(ig2_gold.tolist())
+                                
+                            if args.get_ig2_pred:
+                                pass
+                                    
+                                
+                                    
 
         toc = time.perf_counter()
         print(f"***** Relation: {relation} evaluated. Costing time: {toc - tic:0.4f} seconds *****")

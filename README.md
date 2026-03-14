@@ -13,4 +13,4 @@
 
 - GPT2 implementation is largely borrowed from Karpathy's NanoGPT tutorial.
 - The code style and analysis done is largely borrowed from and inspired from the [[paper]](https://arxiv.org/abs/2406.10130)'s implementation.
-- Pieces of code (certain functions) generated using AI has been labeled (through comments) appropriately.
+- Pieces of code (certain functions) generated using AI have been labeled (through comments) appropriately.
